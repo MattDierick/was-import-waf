@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scan → Advanced WAF</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">F5</span><div><h1>Scan → Advanced WAF</h1><p>Import vulnerability scans and resolve them in a WAF policy</p></div></div>
+  <div id="conn" class="conn hidden"><span class="dot"></span><span id="connText"></span><button id="btnDisconnect" class="link">Disconnect</button></div>
+</header>
+
+<ol class="steps" id="steps">
+  <li data-step="1">Scan file</li>
+  <li data-step="2">BIG-IP</li>
+  <li data-step="3">Policy &amp; import</li>
+  <li data-step="4">Vulnerabilities</li>
+</ol>
+
+<main>
+  <!-- 1 -->
+  <section class="card" data-panel="1">
+    <h2>1 · Scan file</h2>
+    <div id="drop" class="drop" tabindex="0">
+      <input type="file" id="file" accept=".xml,text/xml,application/xml" hidden>
+      <strong>Drop a scanner XML file here</strong> or <u>browse</u>
+      <small>Generic scanner format (<code>&lt;scanner_vulnerabilities&gt;</code>) — parsed locally for a preview</small>
+    </div>
+    <div id="filePreview" class="hidden">
+      <div class="filemeta"><b id="fileName"></b><span id="fileInfo"></span><button class="link" id="btnClearFile">Remove</button></div>
+      <div id="sevSummary" class="chips"></div>
+      <div class="tablewrap short"><table id="previewTable"><thead><tr><th>Severity</th><th>Name</th><th>URL</th><th>Parameter</th><th>Attack type</th></tr></thead><tbody></tbody></table></div>
+    </div>
+    <div class="actions"><button id="to2" class="primary" disabled>Next: BIG-IP →</button></div>
+  </section>
+
+  <!-- 2 -->
+  <section class="card hidden" data-panel="2">
+    <h2>2 · Connect to BIG-IP</h2>
+    <form id="connForm" autocomplete="off">
+      <div class="grid">
+        <label>Address / hostname <input id="host" placeholder="192.0.2.10 or bigip.example.com[:8443]" required></label>
+        <label>Username <input id="username" placeholder="admin" required></label>
+        <label>Password <input id="password" type="password" required></label>
+      </div>
+      <label class="check"><input type="checkbox" id="verifyTls"> Verify TLS certificate <small>(leave off for self-signed management certs)</small></label>
+      <p class="note">Credentials are sent only to this local app and kept in memory for the session (30 min idle). Nothing is written to disk.</p>
+      <div class="actions"><button type="button" class="ghost" data-go="1">← Back</button><button class="primary" id="btnConnect">Connect &amp; list policies</button></div>
+    </form>
+  </section>
+
+  <!-- 3 -->
+  <section class="card hidden" data-panel="3">
+    <h2>3 · Choose the WAF policy and import</h2>
+    <div class="toolbar"><input id="polFilter" placeholder="Filter policies…" type="search"><button class="ghost" id="btnRefreshPol">↻ Rescan policies</button></div>
+    <div class="tablewrap"><table id="polTable"><thead><tr><th></th><th>Policy</th><th>ID</th><th>Enforcement</th><th>Type</th><th>Virtual servers</th></tr></thead><tbody></tbody></table></div>
+    <fieldset class="domains">
+      <legend>Domains to import <small>(required by BIG-IP)</small></legend>
+      <label class="check"><input type="radio" name="domMode" value="all" id="domAll"> All domain names in the scan</label>
+      <label class="check"><input type="radio" name="domMode" value="sel" id="domSel" checked> Only the selected domains</label>
+      <div id="domList" class="domlist"></div>
+      <div class="toolbar"><input id="domCustom" placeholder="Add a domain manually…"><button type="button" class="ghost" id="btnAddDom">Add</button><button type="button" class="ghost" id="btnAskDom" title="Let BIG-IP read the domain names from the scan">Get domains from BIG-IP</button></div>
+    </fieldset>
+    <div class="actions"><button type="button" class="ghost" data-go="2">← Back</button><button class="primary" id="btnImport" disabled>Upload &amp; import scan</button></div>
+  </section>
+
+  <!-- 4 -->
+  <section class="card hidden" data-panel="4">
+    <h2>4 · Vulnerabilities detected by BIG-IP <small id="polLabel"></small></h2>
+    <div class="toolbar">
+      <input id="vFilter" type="search" placeholder="Filter by name, URL, parameter…">
+      <select id="vSev"><option value="">All severities</option><option>critical</option><option>high</option><option>medium</option><option>low</option><option>info</option></select>
+      <select id="vStatus"><option value="">All statuses</option></select>
+      <label class="check inline"><input type="checkbox" id="vResOnly"> Resolvable only</label>
+      <button class="ghost" id="btnSelAll">Select all shown</button>
+      <button class="ghost" id="btnSelNone">Clear</button>
+    </div>
+    <div class="tablewrap tall"><table id="vTable"><thead><tr><th><input type="checkbox" id="chkAll" title="Select all shown"></th><th>Severity</th><th>Name</th><th>URL</th><th>Parameter</th><th>Attack type</th><th>Status</th><th>BIG-IP fix</th></tr></thead><tbody></tbody></table></div>
+    <div class="applybar">
+      <span id="selCount">0 selected</span>
+      <label class="check inline"><input type="checkbox" id="optStage"> Put new entities in staging</label>
+      <label class="check inline"><input type="checkbox" id="optApply" checked> Apply policy afterwards</label>
+      <button class="primary danger" id="btnResolve" disabled>Apply fixes to policy</button>
+    </div>
+    <div class="actions"><button type="button" class="ghost" data-go="3">← Policies</button><button class="ghost" id="btnReload">↻ Reload from BIG-IP</button><button class="ghost" id="btnRaw" title="Show what BIG-IP returned, for troubleshooting">{ } Raw BIG-IP data</button></div>
+    <dialog id="rawDlg"><div class="loghead"><b>Raw vulnerability objects from BIG-IP</b><span><button class="link" id="btnCopyRaw">Copy</button><button class="link" id="btnCloseRaw">Close</button></span></div><pre id="rawPre"></pre></dialog>
+  </section>
+
+  <div id="log" class="log hidden"><div class="loghead"><b>Activity</b><button class="link" id="btnClearLog">Clear</button></div><ul id="logList"></ul></div>
+</main>
+
+<div id="busy" class="busy hidden"><div class="spin"></div><span id="busyText">Working…</span></div>
+<div id="toast" class="toast hidden"></div>
+<script src="app.js"></script>
+</body>
+</html>

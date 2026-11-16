@@ -1,0 +1,845 @@
+{
+  "info": {
+    "name": "BIG-IP Advanced WAF – Import scan & resolve vulnerabilities",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Run the folders in order (or use the Collection Runner with the environment \"BIG-IP WAF scan import\").\n\nFlow: login → pick policy → upload scan → (optional) discover domains → import → list vulnerabilities → resolve → apply policy → verify.\n\nSet in the environment: bigip_host, bigip_username, bigip_password, policy_name, domain_names (or import_all_domains=true), optionally vulnerability_ids.\nDisable \"SSL certificate verification\" in Postman settings (or the request) if the BIG-IP management cert is self-signed.\nPolling requests re-run themselves via setNextRequest — this only works in the Collection Runner / Newman; with a single Send, press Send again until the status is COMPLETED."
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-F5-Auth-Token"
+      },
+      {
+        "key": "value",
+        "value": "{{token}}"
+      },
+      {
+        "key": "in",
+        "value": "header"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "policy_id",
+      "value": ""
+    },
+    {
+      "key": "task_id",
+      "value": ""
+    },
+    {
+      "key": "uploaded_name",
+      "value": ""
+    },
+    {
+      "key": "domain_fragment",
+      "value": ""
+    },
+    {
+      "key": "resolve_refs",
+      "value": ""
+    },
+    {
+      "key": "auto_resolve_ids",
+      "value": ""
+    },
+    {
+      "key": "nonresolvable_ids",
+      "value": ""
+    },
+    {
+      "key": "resolved_ids",
+      "value": ""
+    },
+    {
+      "key": "poll_count",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0 · Authentication",
+      "item": [
+        {
+          "name": "0.1 Login (get token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login OK (200)', () => pm.response.to.have.status(200));",
+                  "const tok = pm.response.json().token.token;",
+                  "pm.collectionVariables.set('token', tok);",
+                  "console.log('Token stored');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{bigip_username}}\",\n  \"password\": \"{{bigip_password}}\",\n  \"loginProviderName\": \"tmos\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/shared/authn/login",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "shared",
+                "authn",
+                "login"
+              ]
+            },
+            "description": "Token-based auth. The token is stored in the collection variable {{token}} and sent as X-F5-Auth-Token by every other request."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 · Policies",
+      "item": [
+        {
+          "name": "1.1 List WAF policies / select by name",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "const items = pm.response.json().items || [];",
+                  "items.forEach(p => console.log(p.id + ' | ' + (p.fullPath || p.name) + ' | ' + (p.enforcementMode || '')));",
+                  "const want = pm.variables.get('policy_name');",
+                  "const p = items.find(x => x.name === want || x.fullPath === want || x.id === want);",
+                  "pm.test('Policy \"' + want + '\" found', () => pm.expect(p, 'set the environment variable policy_name to one of the names in the console').to.exist);",
+                  "if (p) { pm.collectionVariables.set('policy_id', p.id); console.log('Selected policy ' + p.fullPath + ' → id ' + p.id); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/policies?$top=500&$select=id,name,fullPath,type,enforcementMode,active",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "policies"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "500"
+                },
+                {
+                  "key": "$select",
+                  "value": "id,name,fullPath,type,enforcementMode,active"
+                }
+              ]
+            },
+            "description": "Lists all ASM policies (see the Postman Console) and selects the one named in the environment variable policy_name (name, full path or id)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 · Import scan",
+      "item": [
+        {
+          "name": "2.1 Upload scan file",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// unique file name on the BIG-IP + Content-Range computed from the body size",
+                  "const name = 'scanimport_' + Date.now() + '_' + pm.variables.get('scan_filename').replace(/[^\\w.\\-]/g, '_');",
+                  "pm.collectionVariables.set('uploaded_name', name);",
+                  "const body = pm.request.body.raw || '';",
+                  "const len = unescape(encodeURIComponent(body)).length;",
+                  "pm.request.headers.upsert({ key: 'Content-Range', value: '0-' + (len - 1) + '/' + len });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Upload OK (200)', () => pm.response.to.have.status(200));",
+                  "console.log('Uploaded as ' + pm.collectionVariables.get('uploaded_name'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/octet-stream"
+              },
+              {
+                "key": "Content-Range",
+                "value": "0-0/1"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<scanner_vulnerabilities xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" version=\"1.0\">\n  <vulnerability>\n    <name>Vulnerable Server Software</name>\n    <url>http://arcadia-mybank.emea.f5se.com/</url>\n    <threat>info</threat>\n    <score>0</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Insecure Transport Layer</name>\n    <url>http://arcadia-mybank.emea.f5se.com/</url>\n    <threat>high</threat>\n    <score>8</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Insecure Transport Layer</name>\n    <url>http://arcadia-mybank.emea.f5se.com/</url>\n    <threat>medium</threat>\n    <score>4</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Logging and Monitoring</name>\n    <url>http://arcadia-mybank.emea.f5se.com</url>\n    <threat>info</threat>\n    <score>0</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Broken Access Control</name>\n    <url>http://arcadia-mybank.emea.f5se.com/api/transfers?account=FR7601234001001</url>\n    <threat>critical</threat>\n    <score>10</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <attack_type>SQL-Injection</attack_type>\n    <name>SQL Injection</name>\n    <url>http://arcadia-mybank.emea.f5se.com/api/transfers?account=FR76012340010011%27</url>\n    <parameter>account</parameter>\n    <threat>critical</threat>\n    <score>10</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Missing Security Headers</name>\n    <url>http://arcadia-mybank.emea.f5se.com/</url>\n    <threat>low</threat>\n    <score>4</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Missing Security Headers</name>\n    <url>http://arcadia-mybank.emea.f5se.com/</url>\n    <threat>low</threat>\n    <score>4</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Missing Security Headers</name>\n    <url>http://arcadia-mybank.emea.f5se.com/</url>\n    <threat>low</threat>\n    <score>4</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Missing Security Headers</name>\n    <url>http://arcadia-mybank.emea.f5se.com/</url>\n    <threat>medium</threat>\n    <score>4</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <name>Missing Subresource Integrity</name>\n    <url>http://arcadia-mybank.emea.f5se.com/dashboard.html</url>\n    <threat>low</threat>\n    <score>3</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n  <vulnerability>\n    <attack_type>Set-Cookie does not use Secure keyword</attack_type>\n    <name>Cookie without Secure Flag</name>\n    <url>http://arcadia-mybank.emea.f5se.com/dashboard.html</url>\n    <cookie>session</cookie>\n    <threat>low</threat>\n    <score>4</score>\n    <status>open</status>\n    <opened xsi:nil=\"true\" />\n  </vulnerability>\n</scanner_vulnerabilities>",
+              "options": {
+                "raw": {
+                  "language": "text"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/file-transfer/uploads/{{uploaded_name}}",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "file-transfer",
+                "uploads",
+                "{{uploaded_name}}"
+              ]
+            },
+            "description": "The body contains the sample scan (vulnerabilities.xml). Replace it with your own scan XML. For files > 1 MB, upload in several chunks with successive Content-Range values (e.g. 0-1048575/3000000, 1048576-2097151/3000000, …)."
+          }
+        },
+        {
+          "name": "2.2 (optional) Ask BIG-IP for the domain names in the scan",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Task created', () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202]));",
+                  "pm.collectionVariables.set('task_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filename\": \"{{uploaded_name}}\",\n  \"policyReference\": {\"link\": \"https://localhost/mgmt/tm/asm/policies/{{policy_id}}\"},\n  \"onlyGetDomainNames\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/tasks/import-vulnerabilities",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "tasks",
+                "import-vulnerabilities"
+              ]
+            },
+            "description": "BIG-IP requires one of onlyGetDomainNames, importAllDomainNames or domainNames. This call only lists the domains; read the result in 2.3, then put them in the environment variable domain_names."
+          }
+        },
+        {
+          "name": "2.3 Poll task (domain names)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 1000); // pause 1 s between polls"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.response.json();",
+                  "const st = String(t.status || '').toUpperCase();",
+                  "pm.test('Domain discovery: task status is ' + st, () => pm.expect(['NEW','STARTED','COMPLETED']).to.include(st));",
+                  "if (st === 'FAILURE' || st === 'FAILED') { throw new Error('Domain discovery task failed: ' + JSON.stringify(t.result || t)); }",
+                  "if (st !== 'COMPLETED') {",
+                  "  const n = Number(pm.collectionVariables.get('poll_count') || 0) + 1;",
+                  "  pm.collectionVariables.set('poll_count', n);",
+                  "  if (n > 60) throw new Error('Timed out waiting for the task');",
+                  "  // Collection Runner / Newman: re-run this request until the task completes",
+                  "  // (the 1 s pause is in the pre-request script of each polling request).",
+                  "  postman.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.set('poll_count', 0);",
+                  "  console.log('Domain discovery COMPLETED', JSON.stringify(t.result || {}));",
+                  "}",
+                  "if (st === 'COMPLETED') console.log('Domains found by BIG-IP: ' + JSON.stringify(t.result));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/tasks/import-vulnerabilities/{{task_id}}",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "tasks",
+                "import-vulnerabilities",
+                "{{task_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "2.4 Import vulnerabilities into the policy",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// import_all_domains=true → importAllDomainNames, otherwise the comma-separated domain_names",
+                  "if (String(pm.variables.get('import_all_domains')).toLowerCase() === 'true') {",
+                  "  pm.collectionVariables.set('domain_fragment', '\"importAllDomainNames\": true');",
+                  "} else {",
+                  "  const d = String(pm.variables.get('domain_names') || '').split(',').map(x => x.trim()).filter(Boolean);",
+                  "  if (!d.length) throw new Error('Set domain_names (comma separated) or import_all_domains=true in the environment');",
+                  "  pm.collectionVariables.set('domain_fragment', '\"domainNames\": ' + JSON.stringify(d));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Task created', () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202]));",
+                  "pm.collectionVariables.set('task_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"filename\": \"{{uploaded_name}}\",\n  \"policyReference\": {\"link\": \"https://localhost/mgmt/tm/asm/policies/{{policy_id}}\"},\n  {{domain_fragment}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/tasks/import-vulnerabilities",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "tasks",
+                "import-vulnerabilities"
+              ]
+            }
+          }
+        },
+        {
+          "name": "2.5 Poll task (import)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 1000); // pause 1 s between polls"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.response.json();",
+                  "const st = String(t.status || '').toUpperCase();",
+                  "pm.test('Import: task status is ' + st, () => pm.expect(['NEW','STARTED','COMPLETED']).to.include(st));",
+                  "if (st === 'FAILURE' || st === 'FAILED') { throw new Error('Import task failed: ' + JSON.stringify(t.result || t)); }",
+                  "if (st !== 'COMPLETED') {",
+                  "  const n = Number(pm.collectionVariables.get('poll_count') || 0) + 1;",
+                  "  pm.collectionVariables.set('poll_count', n);",
+                  "  if (n > 60) throw new Error('Timed out waiting for the task');",
+                  "  // Collection Runner / Newman: re-run this request until the task completes",
+                  "  // (the 1 s pause is in the pre-request script of each polling request).",
+                  "  postman.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.set('poll_count', 0);",
+                  "  console.log('Import COMPLETED', JSON.stringify(t.result || {}));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/tasks/import-vulnerabilities/{{task_id}}",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "tasks",
+                "import-vulnerabilities",
+                "{{task_id}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 · Vulnerabilities",
+      "item": [
+        {
+          "name": "3.1 List vulnerabilities selected by BIG-IP",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const items = pm.response.json().items || [];",
+                  "const notResolvable = i => /not[\\s_-]*resolvable|unresolvable/i.test(String(i.resolveType || ''));",
+                  "const done = i => /resolved|fixed|mitigated|closed/i.test(String(i.status || ''));",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "console.log('Vulnerabilities in policy: ' + items.length);",
+                  "items.forEach(i => console.log([i.id, (i.threat||i.severity||'').toString().padEnd(8), i.resolveType || '?', i.status || '', i.name || '', i.url || ''].join(' | ')));",
+                  "const ok = items.filter(i => !notResolvable(i) && !done(i));",
+                  "pm.collectionVariables.set('auto_resolve_ids', ok.map(i => i.id).join(','));",
+                  "pm.collectionVariables.set('nonresolvable_ids', items.filter(notResolvable).map(i => i.id).join(','));",
+                  "pm.collectionVariables.set('resolved_ids', items.filter(done).map(i => i.id).join(','));",
+                  "console.log('Resolvable & open: ' + ok.length + ' | not resolvable: ' + items.filter(notResolvable).length + ' | already resolved: ' + items.filter(done).length);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/policies/{{policy_id}}/vulnerabilities?$top=500",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "policies",
+                "{{policy_id}}",
+                "vulnerabilities"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "500"
+                }
+              ]
+            },
+            "description": "Prints id | severity | resolveType | status | name | url in the Console and stores which ids are resolvable. Items with resolveType \"not-resolvable\" can never be resolved."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 · Resolve & apply",
+      "item": [
+        {
+          "name": "4.1 Resolve selected vulnerabilities",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// vulnerability_ids (comma separated) chooses what to fix; blank = every resolvable, still-open one",
+                  "const manual = String(pm.variables.get('vulnerability_ids') || '').split(',').map(x => x.trim()).filter(Boolean);",
+                  "const ids = manual.length ? manual : String(pm.collectionVariables.get('auto_resolve_ids') || '').split(',').filter(Boolean);",
+                  "const bad = String(pm.collectionVariables.get('nonresolvable_ids') || '').split(',').filter(Boolean);",
+                  "const blocked = ids.filter(i => bad.includes(i));",
+                  "if (blocked.length) throw new Error('Not resolvable by BIG-IP, remove from vulnerability_ids: ' + blocked.join(', '));",
+                  "if (!ids.length) throw new Error('Nothing to resolve (run 3.1 first; none resolvable/open)');",
+                  "const pid = pm.collectionVariables.get('policy_id');",
+                  "pm.collectionVariables.set('resolve_refs', JSON.stringify(ids.map(i => ({ link: 'https://localhost/mgmt/tm/asm/policies/' + pid + '/vulnerabilities/' + i }))));",
+                  "console.log('Resolving ' + ids.length + ' vulnerabilities: ' + ids.join(', '));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Task created', () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202]));",
+                  "pm.collectionVariables.set('task_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"policyReference\": {\"link\": \"https://localhost/mgmt/tm/asm/policies/{{policy_id}}\"},\n  \"vulnerabilityReferences\": {{resolve_refs}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/tasks/resolve-vulnerabilities",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "tasks",
+                "resolve-vulnerabilities"
+              ]
+            }
+          }
+        },
+        {
+          "name": "4.2 Poll task (resolve)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 1000); // pause 1 s between polls"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.response.json();",
+                  "const st = String(t.status || '').toUpperCase();",
+                  "pm.test('Resolve: task status is ' + st, () => pm.expect(['NEW','STARTED','COMPLETED']).to.include(st));",
+                  "if (st === 'FAILURE' || st === 'FAILED') { throw new Error('Resolve task failed: ' + JSON.stringify(t.result || t)); }",
+                  "if (st !== 'COMPLETED') {",
+                  "  const n = Number(pm.collectionVariables.get('poll_count') || 0) + 1;",
+                  "  pm.collectionVariables.set('poll_count', n);",
+                  "  if (n > 60) throw new Error('Timed out waiting for the task');",
+                  "  // Collection Runner / Newman: re-run this request until the task completes",
+                  "  // (the 1 s pause is in the pre-request script of each polling request).",
+                  "  postman.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.set('poll_count', 0);",
+                  "  console.log('Resolve COMPLETED', JSON.stringify(t.result || {}));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/tasks/resolve-vulnerabilities/{{task_id}}",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "tasks",
+                "resolve-vulnerabilities",
+                "{{task_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "4.3 Apply policy",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Task created', () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202]));",
+                  "pm.collectionVariables.set('task_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"policyReference\": {\"link\": \"https://localhost/mgmt/tm/asm/policies/{{policy_id}}\"}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/tasks/apply-policy",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "tasks",
+                "apply-policy"
+              ]
+            },
+            "description": "Pushes the policy changes live. Skip it if you want to review the policy first."
+          }
+        },
+        {
+          "name": "4.4 Poll task (apply policy)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 1000); // pause 1 s between polls"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const t = pm.response.json();",
+                  "const st = String(t.status || '').toUpperCase();",
+                  "pm.test('Apply policy: task status is ' + st, () => pm.expect(['NEW','STARTED','COMPLETED']).to.include(st));",
+                  "if (st === 'FAILURE' || st === 'FAILED') { throw new Error('Apply policy task failed: ' + JSON.stringify(t.result || t)); }",
+                  "if (st !== 'COMPLETED') {",
+                  "  const n = Number(pm.collectionVariables.get('poll_count') || 0) + 1;",
+                  "  pm.collectionVariables.set('poll_count', n);",
+                  "  if (n > 60) throw new Error('Timed out waiting for the task');",
+                  "  // Collection Runner / Newman: re-run this request until the task completes",
+                  "  // (the 1 s pause is in the pre-request script of each polling request).",
+                  "  postman.setNextRequest(pm.info.requestName);",
+                  "} else {",
+                  "  pm.collectionVariables.set('poll_count', 0);",
+                  "  console.log('Apply policy COMPLETED', JSON.stringify(t.result || {}));",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/tasks/apply-policy/{{task_id}}",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "tasks",
+                "apply-policy",
+                "{{task_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "4.5 Verify: list vulnerabilities again",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const items = pm.response.json().items || [];",
+                  "const notResolvable = i => /not[\\s_-]*resolvable|unresolvable/i.test(String(i.resolveType || ''));",
+                  "const done = i => /resolved|fixed|mitigated|closed/i.test(String(i.status || ''));",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "console.log('Vulnerabilities in policy: ' + items.length);",
+                  "items.forEach(i => console.log([i.id, (i.threat||i.severity||'').toString().padEnd(8), i.resolveType || '?', i.status || '', i.name || '', i.url || ''].join(' | ')));",
+                  "const ok = items.filter(i => !notResolvable(i) && !done(i));",
+                  "pm.collectionVariables.set('auto_resolve_ids', ok.map(i => i.id).join(','));",
+                  "pm.collectionVariables.set('nonresolvable_ids', items.filter(notResolvable).map(i => i.id).join(','));",
+                  "pm.collectionVariables.set('resolved_ids', items.filter(done).map(i => i.id).join(','));",
+                  "console.log('Resolvable & open: ' + ok.length + ' | not resolvable: ' + items.filter(notResolvable).length + ' | already resolved: ' + items.filter(done).length);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/tm/asm/policies/{{policy_id}}/vulnerabilities?$top=500",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "tm",
+                "asm",
+                "policies",
+                "{{policy_id}}",
+                "vulnerabilities"
+              ],
+              "query": [
+                {
+                  "key": "$top",
+                  "value": "500"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 · Cleanup",
+      "item": [
+        {
+          "name": "5.1 Logout (delete token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Token deleted', () => pm.expect(pm.response.code).to.be.oneOf([200, 204]));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "https://{{bigip_host}}/mgmt/shared/authz/tokens/{{token}}",
+              "protocol": "https",
+              "host": [
+                "{{bigip_host}}"
+              ],
+              "path": [
+                "mgmt",
+                "shared",
+                "authz",
+                "tokens",
+                "{{token}}"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

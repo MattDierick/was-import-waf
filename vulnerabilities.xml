@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<scanner_vulnerabilities xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" version="1.0">
+  <vulnerability>
+    <name>Vulnerable Server Software</name>
+    <url>http://arcadia-mybank.emea.f5se.com/</url>
+    <threat>info</threat>
+    <score>0</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Insecure Transport Layer</name>
+    <url>http://arcadia-mybank.emea.f5se.com/</url>
+    <threat>high</threat>
+    <score>8</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Insecure Transport Layer</name>
+    <url>http://arcadia-mybank.emea.f5se.com/</url>
+    <threat>medium</threat>
+    <score>4</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Logging and Monitoring</name>
+    <url>http://arcadia-mybank.emea.f5se.com</url>
+    <threat>info</threat>
+    <score>0</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Broken Access Control</name>
+    <url>http://arcadia-mybank.emea.f5se.com/api/transfers?account=FR7601234001001</url>
+    <threat>critical</threat>
+    <score>10</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <attack_type>SQL-Injection</attack_type>
+    <name>SQL Injection</name>
+    <url>http://arcadia-mybank.emea.f5se.com/api/transfers?account=FR76012340010011%27</url>
+    <parameter>account</parameter>
+    <threat>critical</threat>
+    <score>10</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Missing Security Headers</name>
+    <url>http://arcadia-mybank.emea.f5se.com/</url>
+    <threat>low</threat>
+    <score>4</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Missing Security Headers</name>
+    <url>http://arcadia-mybank.emea.f5se.com/</url>
+    <threat>low</threat>
+    <score>4</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Missing Security Headers</name>
+    <url>http://arcadia-mybank.emea.f5se.com/</url>
+    <threat>low</threat>
+    <score>4</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Missing Security Headers</name>
+    <url>http://arcadia-mybank.emea.f5se.com/</url>
+    <threat>medium</threat>
+    <score>4</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <name>Missing Subresource Integrity</name>
+    <url>http://arcadia-mybank.emea.f5se.com/dashboard.html</url>
+    <threat>low</threat>
+    <score>3</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+  <vulnerability>
+    <attack_type>Set-Cookie does not use Secure keyword</attack_type>
+    <name>Cookie without Secure Flag</name>
+    <url>http://arcadia-mybank.emea.f5se.com/dashboard.html</url>
+    <cookie>session</cookie>
+    <threat>low</threat>
+    <score>4</score>
+    <status>open</status>
+    <opened xsi:nil="true" />
+  </vulnerability>
+</scanner_vulnerabilities>
