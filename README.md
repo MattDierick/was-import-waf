@@ -3,6 +3,10 @@
 Zero-dependency Node (>=18) app. Import a scanner XML, pick a BIG-IP + WAF policy,
 see what BIG-IP derived from the scan, select vulnerabilities and resolve them.
 
+![Vulnerabilities detected by BIG-IP, with resolvable items selected](docs/screenshot.png)
+
+*Step 4: BIG-IP lists the vulnerabilities derived from the scan; only the ones it can resolve are selectable.*
+
     npm start            # http://127.0.0.1:3000
     npm run mock         # optional fake BIG-IP on https://127.0.0.1:8443 (admin/admin)
     npm test             # end-to-end test against the mock
